@@ -1,5 +1,7 @@
 import { connectToDatabase } from '../db';
-import { ObjectId } from 'mongodb';
+import SmtpDomain, { ISmtpDomain } from '../models/SmtpDomain';
+import SmtpDomainUsage, { ISmtpDomainUsage } from '../models/SmtpDomainUsage';
+import mongoose from 'mongoose';
 
 /**
  * Interface describing the SMTP domain configuration. Each entry represents
@@ -25,21 +27,6 @@ export interface DomainConfig {
 }
 
 /**
- * Interface describing the usage record for a domain. Each domain has an
- * associated document in the `smtp_domain_usage` collection which tracks
- * how many messages have been sent in the current one‑hour window and when
- * that window started. When the window expires (i.e. an hour has elapsed
- * since `window_start`), the count is reset. The `domain_id` field is a
- * reference to the `_id` of the domain configuration document.
- */
-interface DomainUsage {
-  _id?: ObjectId;
-  domain_id: ObjectId;
-  window_start: Date;
-  count: number;
-}
-
-/**
  * DomainService manages SMTP domain configuration and usage. It allows
  * administrators to add new domains, retrieve the list of configured
  * domains, and handle per‑domain send limits. The send limit logic is
@@ -53,13 +40,9 @@ export class DomainService {
    * to a string `id` property.
    */
   async getDomains(): Promise<DomainConfig[]> {
-    const db = await connectToDatabase();
-    const domains = await db
-      .collection('smtp_domains')
-      .find()
-      .sort({ order: 1 })
-      .toArray();
-    return domains.map((doc: any) => ({
+    await connectToDatabase();
+    const domains = await SmtpDomain.find().sort({ order: 1 }).lean();
+    return domains.map((doc) => ({
       id: doc._id.toString(),
       host: doc.host,
       port: doc.port,
@@ -70,7 +53,7 @@ export class DomainService {
       limit: doc.limit,
       order: doc.order,
       created_at: doc.created_at,
-    })) as DomainConfig[];
+    }));
   }
 
   /**
@@ -82,30 +65,23 @@ export class DomainService {
    */
   async addDomain(config: Omit<DomainConfig, 'id' | 'created_at' | 'order'> & { order?: number }): Promise<DomainConfig | null> {
     try {
-      const db = await connectToDatabase();
+      await connectToDatabase();
       // Determine default order if not provided. This ensures new domains
       // are appended to the end of the priority list by default.
       let order = config.order;
       if (order === undefined) {
-        const count = await db.collection('smtp_domains').countDocuments();
+        const count = await SmtpDomain.countDocuments();
         order = count;
       }
       const doc = {
-        host: config.host,
-        port: config.port,
-        secure: config.secure,
-        username: config.username,
-        password: config.password,
-        from: config.from,
-        limit: config.limit,
+        ...config,
         order: order,
-        created_at: new Date().toISOString(),
       };
-      const result = await db.collection('smtp_domains').insertOne(doc as any);
+      const newDomain = await SmtpDomain.create(doc);
       return {
-        id: result.insertedId.toString(),
-        ...doc,
-      } as DomainConfig;
+        id: newDomain.id,
+        ...newDomain.toObject(),
+      };
     } catch (error) {
       console.error('Error adding SMTP domain:', error);
       return null;
@@ -115,26 +91,23 @@ export class DomainService {
   /**
    * Retrieves the usage document for the given domain. If no usage document
    * exists, one is created with a window start equal to now and count of
-   * zero. This ensures usage tracking always returns a valid record. The
-   * returned object includes both the usage document and the underlying
-   * MongoDB `_id` for internal updates.
+   * zero. This ensures usage tracking always returns a valid record.
    *
    * @param domainId String representation of the domain's ObjectId.
    */
-  private async getUsageDoc(domainId: string): Promise<DomainUsage> {
-    const db = await connectToDatabase();
-    const domId = new ObjectId(domainId);
-    let usage = await db.collection('smtp_domain_usage').findOne({ domain_id: domId });
+  private async getUsageDoc(domainId: string): Promise<ISmtpDomainUsage> {
+    await connectToDatabase();
+    const domId = new mongoose.Types.ObjectId(domainId);
+    let usage = await SmtpDomainUsage.findOne({ domain_id: domId });
     if (!usage) {
-      const newUsage: DomainUsage = {
+      const newUsage = {
         domain_id: domId,
         window_start: new Date(),
         count: 0,
       };
-      const result = await db.collection('smtp_domain_usage').insertOne(newUsage as any);
-      usage = { _id: result.insertedId, ...newUsage } as any;
+      usage = await SmtpDomainUsage.create(newUsage);
     }
-    return usage as DomainUsage;
+    return usage;
   }
 
   /**
@@ -146,7 +119,7 @@ export class DomainService {
    *
    * @param domain Domain configuration object.
    */
-  private async hasQuota(domain: DomainConfig): Promise<{ available: boolean; usage: DomainUsage }> {
+  private async hasQuota(domain: DomainConfig): Promise<{ available: boolean; usage: ISmtpDomainUsage }> {
     const usage = await this.getUsageDoc(domain.id);
     const now = new Date();
     const windowStart = usage.window_start;
@@ -155,10 +128,7 @@ export class DomainService {
     if (elapsed >= 60 * 60 * 1000) {
       usage.window_start = now;
       usage.count = 0;
-      const db = await connectToDatabase();
-      await db
-        .collection('smtp_domain_usage')
-        .updateOne({ _id: usage._id }, { $set: { window_start: usage.window_start, count: usage.count } });
+      await usage.save();
     }
     // Determine if the domain has available quota
     const available = usage.count < domain.limit;
@@ -183,10 +153,7 @@ export class DomainService {
     } else {
       usage.count += 1;
     }
-    const db = await connectToDatabase();
-    await db
-      .collection('smtp_domain_usage')
-      .updateOne({ _id: usage._id }, { $set: { window_start: usage.window_start, count: usage.count } });
+    await usage.save();
   }
 
   /**

@@ -1,4 +1,4 @@
-import { MongoClient, Db } from "mongodb";
+import mongoose from 'mongoose';
 import dotenv from 'dotenv';
 
 // Load environment variables as early as possible. Without calling dotenv.config()
@@ -8,28 +8,23 @@ import dotenv from 'dotenv';
 // process.env is populated before accessing it below.
 dotenv.config();
 
-// Explicitly type the MongoDB URI as `any` to avoid TypeScript warnings. This
-// ensures that even if the environment variable is undefined or missing,
-// TypeScript will not complain about type incompatibility when passing
-// MONGODB_URI to the MongoClient constructor. In a real application you
-// should perform runtime checks and validation.
-const MONGODB_URI: any = process.env.MONGO_URI;
+const MONGODB_URI: string = process.env.MONGO_URI || '';
 
 if (!MONGODB_URI) {
   throw new Error("MONGO_URI is not defined in the environment variables.");
 }
 
-let db: Db;
-
-export async function connectToDatabase(): Promise<Db> {
-  if (db) {
-    return db;
+export async function connectToDatabase(): Promise<void> {
+  // If connection is already established, do nothing.
+  if (mongoose.connection.readyState >= 1) {
+    return;
   }
 
-  const client = new MongoClient(MONGODB_URI);
-  await client.connect();
-
-  db = client.db();
-  console.log("Connected to MongoDB");
-  return db;
+  try {
+    await mongoose.connect(MONGODB_URI);
+    console.log("Connected to MongoDB with Mongoose");
+  } catch (error) {
+    console.error("Mongoose connection error:", error);
+    throw new Error("Could not connect to MongoDB");
+  }
 }

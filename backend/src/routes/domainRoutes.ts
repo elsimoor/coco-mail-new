@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { DomainService } from '../services/domainService';
 import { authenticate } from '../middleware/auth';
 import { connectToDatabase } from '../db';
-import { ObjectId } from 'mongodb';
+import User from '../models/User';
 
 // Routes for managing SMTP domains used by free users. Domains determine
 // which SMTP servers are available for sending emails on the free tier. Only
@@ -17,8 +17,8 @@ const domainService = new DomainService();
 // containing the user's id. We fetch the full user document from MongoDB
 // and inspect its roles array. Returns true if the user is an admin.
 async function isAdmin(userId: string): Promise<boolean> {
-  const db = await connectToDatabase();
-  const user = await db.collection('users').findOne({ _id: new ObjectId(userId) });
+  await connectToDatabase();
+  const user = await User.findById(userId);
   return Array.isArray(user?.roles) && user.roles.includes('admin');
 }
 
