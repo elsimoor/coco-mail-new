@@ -1,0 +1,49 @@
+# Shared GraphQL schema (starter)
+
+type User {
+  id: ID!
+  email: String!
+  name: String
+  roles: [String!]!
+  createdAt: String!
+}
+
+type Message {
+  id: ID!
+  senderId: ID!
+  receiverId: ID!
+  ciphertext: String! # encrypted payload
+  createdAt: String!
+}
+
+type EphemeralEmail {
+  address: String!
+  password: String!
+}
+
+type EmailSender {
+  name: String
+  address: String!
+}
+
+type EphemeralMessage {
+  id: ID!
+  from: EmailSender!
+  subject: String!
+  intro: String!
+  createdAt: String!
+}
+
+type Query {
+  me: User
+  users(limit: Int, offset: Int): [User!]!
+  messagesWith(userId: ID!, limit: Int, offset: Int): [Message!]!
+  getEphemeralMessages(address: String!, password: String!): [EphemeralMessage!]!
+}
+
+type Mutation {
+  register(email: String!, password: String!, name: String): User!
+  login(email: String!, password: String!): String! # returns JWT token
+  sendMessage(receiverId: ID!, ciphertext: String!): Message!
+  createEphemeralEmail: EphemeralEmail!
+}
