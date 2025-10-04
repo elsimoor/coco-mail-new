@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { createHmac } from 'crypto';
 import { connectToDatabase } from '../db';
-import { ObjectId } from 'mongodb';
+import User from '../models/User';
 import dotenv from 'dotenv';
 
 // Load environment variables early. This ensures JWT_SECRET and other
@@ -56,13 +56,13 @@ export async function authenticate(req: AuthRequest, res: Response, next: NextFu
         return res.status(401).json({ error: 'Token expired' });
       }
       // Fetch user from MongoDB
-      const db = await connectToDatabase();
-      const user = await db.collection('users').findOne({ _id: new ObjectId(decoded.userId) });
+      await connectToDatabase();
+      const user = await User.findById(decoded.userId);
       if (!user) {
         return res.status(401).json({ error: 'User not found' });
       }
       req.user = {
-        id: user._id.toString(),
+        id: user.id,
         email: user.email,
       };
       next();
@@ -70,10 +70,6 @@ export async function authenticate(req: AuthRequest, res: Response, next: NextFu
       console.error('Token parsing error:', err);
       return res.status(401).json({ error: 'Invalid token' });
     }
-    // The user has already been validated and set on the request in the above
-    // block. If the code reaches this point, it means an unexpected path was
-    // taken; simply call next() to continue processing.
-    return next();
   } catch (error) {
     console.error('Auth middleware error:', error);
     res.status(500).json({ error: 'Authentication failed' });

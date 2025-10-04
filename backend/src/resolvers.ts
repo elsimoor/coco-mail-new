@@ -4,6 +4,8 @@ import { GraphQLError } from "graphql";
 import { getDomains, createAccount, getToken, getMessages } from './services/email';
 import { randomBytes } from 'crypto';
 import dotenv from 'dotenv';
+import User from './models/User';
+import { connectToDatabase } from './db';
 
 // Ensure environment variables (such as JWT_SECRET) are loaded before
 // accessing them. Without this call, JWT_SECRET may be undefined
@@ -24,8 +26,8 @@ const resolvers = {
         });
       }
       return {
-        ...context.user,
-        id: context.user._id,
+        ...context.user._doc,
+        id: context.user.id,
       };
     },
     users: (_: any, __: any, context: any) => {
@@ -56,11 +58,12 @@ const resolvers = {
     }
   },
   Mutation: {
-    register: async (_: any, args: any, context: any) => {
-      const { db } = context;
+    register: async (_: any, args: any) => {
       const { email, password, name } = args;
 
-      const existingUser = await db.collection("users").findOne({ email });
+      await connectToDatabase();
+
+      const existingUser = await User.findOne({ email });
       if (existingUser) {
         throw new GraphQLError("User with this email already exists", {
           extensions: { code: 'BAD_USER_INPUT' },
@@ -73,23 +76,22 @@ const resolvers = {
         email,
         password: hashedPassword,
         name,
-        roles: ["user"],
-        createdAt: new Date().toISOString(),
       };
 
-      const result = await db.collection("users").insertOne(newUser);
+      const user = await User.create(newUser);
 
       return {
-        id: result.insertedId,
-        ...newUser,
+        id: user.id,
+        ...user._doc,
       };
     },
-    login: async (_: any, args: any, context: any) => {
-      const { db } = context;
+    login: async (_: any, args: any) => {
       const { email, password } = args;
 
-      const user = await db.collection("users").findOne({ email });
-      if (!user) {
+      await connectToDatabase();
+
+      const user = await User.findOne({ email }).select('+password');
+      if (!user || !user.password) {
         throw new GraphQLError("Invalid email or password", {
           extensions: { code: 'BAD_USER_INPUT' },
         });

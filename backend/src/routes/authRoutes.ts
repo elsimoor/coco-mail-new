@@ -2,8 +2,8 @@ import { Router } from 'express';
 import bcrypt from 'bcrypt';
 import { connectToDatabase } from '../db';
 import { createHmac } from 'crypto';
-import { ObjectId } from 'mongodb';
 import dotenv from 'dotenv';
+import User from '../models/User';
 
 // Load environment variables early so that JWT_SECRET is available when
 // this module is evaluated. Without calling dotenv.config() here,
@@ -47,8 +47,8 @@ router.post('/register', async (req, res) => {
     return res.status(400).json({ error: 'Email and password are required' });
   }
   try {
-    const db = await connectToDatabase();
-    const existing = await db.collection('users').findOne({ email });
+    await connectToDatabase();
+    const existing = await User.findOne({ email });
     if (existing) {
       return res.status(400).json({ error: 'User with this email already exists' });
     }
@@ -57,12 +57,9 @@ router.post('/register', async (req, res) => {
       email,
       password: hashedPassword,
       name,
-      roles: ['user'],
-      is_pro: false,
-      created_at: new Date().toISOString(),
     };
-    const result = await db.collection('users').insertOne(newUser);
-    return res.json({ id: result.insertedId.toString(), email, name });
+    const user = await User.create(newUser);
+    return res.json({ id: user.id, email: user.email, name: user.name });
   } catch (err) {
     console.error('Error registering user:', err);
     return res.status(500).json({ error: 'Failed to register user' });
@@ -76,9 +73,9 @@ router.post('/login', async (req, res) => {
     return res.status(400).json({ error: 'Email and password are required' });
   }
   try {
-    const db = await connectToDatabase();
-    const user = await db.collection('users').findOne({ email });
-    if (!user) {
+    await connectToDatabase();
+    const user = await User.findOne({ email }).select('+password');
+    if (!user || !user.password) {
       return res.status(400).json({ error: 'Invalid email or password' });
     }
     const isValid = await bcrypt.compare(password, user.password);
@@ -133,12 +130,12 @@ router.get('/me', async (req, res) => {
     if (decoded.exp && decoded.exp < Math.floor(Date.now() / 1000)) {
       return res.status(401).json({ error: 'Token expired' });
     }
-    const db = await connectToDatabase();
-    const user = await db.collection('users').findOne({ _id: new ObjectId(decoded.userId) });
+    await connectToDatabase();
+    const user = await User.findById(decoded.userId);
     if (!user) {
       return res.status(401).json({ error: 'User not found' });
     }
-    return res.json({ id: user._id.toString(), email: user.email, name: user.name, roles: user.roles });
+    return res.json({ id: user.id, email: user.email, name: user.name, roles: user.roles });
   } catch (err) {
     console.error('Error fetching current user:', err);
     return res.status(500).json({ error: 'Failed to get current user' });

@@ -1,6 +1,6 @@
-import { SecureNote } from '../types';
+import { SecureNote as SecureNoteType } from '../types';
+import SecureNote from '../models/SecureNote';
 import { connectToDatabase } from '../db';
-import { ObjectId } from 'mongodb';
 
 export class NoteService {
   async createNote(
@@ -9,72 +9,58 @@ export class NoteService {
     encryptedContent: string,
     autoDeleteAfterRead: boolean,
     expiresAt?: string
-  ): Promise<SecureNote | null> {
+  ): Promise<SecureNoteType | null> {
     try {
-      const db = await connectToDatabase();
-      const doc: Omit<SecureNote, 'id'> = {
+      await connectToDatabase();
+      const doc = {
         user_id: userId,
         title,
         encrypted_content: encryptedContent,
         auto_delete_after_read: autoDeleteAfterRead,
         has_been_read: false,
         expires_at: expiresAt,
-        created_at: new Date().toISOString(),
-      } as any;
-      const result = await db.collection('secure_notes').insertOne(doc);
-      // Cast the document to any before spreading. This prevents TypeScript
-      // errors due to the ObjectId type on the `_id` field.
-      const noteDoc: any = doc;
-      return { id: result.insertedId.toString(), ...noteDoc } as SecureNote;
+      };
+      const createdNote = await SecureNote.create(doc);
+      const { _id, __v, ...noteFields } = createdNote.toObject();
+      return { id: createdNote.id, ...noteFields } as SecureNoteType;
     } catch (error) {
       console.error('Error creating note:', error);
       return null;
     }
   }
 
-  async getUserNotes(userId: string): Promise<SecureNote[]> {
+  async getUserNotes(userId: string): Promise<SecureNoteType[]> {
     try {
-      const db = await connectToDatabase();
-      const notes = await db
-        .collection('secure_notes')
-        .find({ user_id: userId })
+      await connectToDatabase();
+      const notes = await SecureNote.find({ user_id: userId })
         .sort({ created_at: -1 })
-        .toArray();
-      // Cast each document to any before spreading to avoid type mismatch. The
-      // MongoDB document includes an `_id` field which is an ObjectId; casting
-      // suppresses related type errors.
-      return notes.map((n: any) => {
-        const noteDoc: any = n;
-        return { id: noteDoc._id.toString(), ...noteDoc } as SecureNote;
-      }) as SecureNote[];
+        .lean();
+
+      return notes.map((n) => {
+        const { _id, __v, ...rest } = n;
+        return { id: _id.toString(), ...rest };
+      }) as SecureNoteType[];
     } catch (error) {
       console.error('Error fetching user notes:', error);
       return [];
     }
   }
 
-  async getNote(noteId: string, userId: string): Promise<SecureNote | null> {
+  async getNote(noteId: string, userId: string): Promise<SecureNoteType | null> {
     try {
-      const db = await connectToDatabase();
-      const note = await db
-        .collection('secure_notes')
-        .findOne({ _id: new ObjectId(noteId), user_id: userId });
+      await connectToDatabase();
+      const note = await SecureNote.findOne({ _id: noteId, user_id: userId });
       if (!note) {
         return null;
       }
       // If auto-delete-after-read, mark as read
       if (note.auto_delete_after_read && !note.has_been_read) {
-        await db
-          .collection('secure_notes')
-          .updateOne({ _id: note._id }, { $set: { has_been_read: true } });
+        note.has_been_read = true;
+        await note.save();
       }
-      // Cast the note document to any before spreading it. Without casting,
-      // TypeScript will complain because the document contains an ObjectId
-      // field. Assigning to a local variable typed as `any` allows us to
-      // spread the properties freely. We also set the id property to the
-      // stringified ObjectId.
-      const noteDoc: any = note;
-      return { id: noteDoc._id.toString(), ...noteDoc } as SecureNote;
+
+      const { _id, __v, ...noteFields } = note.toObject();
+      return { id: note.id, ...noteFields } as SecureNoteType;
     } catch (error) {
       console.error('Error fetching note:', error);
       return null;
@@ -83,10 +69,8 @@ export class NoteService {
 
   async deleteNote(noteId: string, userId: string): Promise<boolean> {
     try {
-      const db = await connectToDatabase();
-      const result = await db
-        .collection('secure_notes')
-        .deleteOne({ _id: new ObjectId(noteId), user_id: userId });
+      await connectToDatabase();
+      const result = await SecureNote.deleteOne({ _id: noteId, user_id: userId });
       return result.deletedCount > 0;
     } catch (error) {
       console.error('Error deleting note:', error);

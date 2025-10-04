@@ -1,7 +1,7 @@
-import { SecureFile } from '../types';
+import { SecureFile as SecureFileType } from '../types';
+import SecureFile from '../models/SecureFile';
 import * as bcrypt from 'bcrypt';
 import { connectToDatabase } from '../db';
-import { ObjectId } from 'mongodb';
 
 export class FileService {
   /**
@@ -18,15 +18,15 @@ export class FileService {
     expiresAt?: string,
     maxDownloads?: number,
     watermarkEnabled: boolean = true
-  ): Promise<SecureFile | null> {
+  ): Promise<SecureFileType | null> {
     try {
-      const db = await connectToDatabase();
+      await connectToDatabase();
       let passwordHash: string | undefined;
       if (passwordProtected && password) {
         passwordHash = await bcrypt.hash(password, 10);
       }
 
-      const doc: Omit<SecureFile, 'id'> = {
+      const doc = {
         user_id: userId,
         filename,
         encrypted_file_url: encryptedFileUrl,
@@ -36,20 +36,11 @@ export class FileService {
         expires_at: expiresAt,
         max_downloads: maxDownloads,
         watermark_enabled: watermarkEnabled,
-        download_count: 0,
-        created_at: new Date().toISOString(),
-      } as any;
+      };
 
-      const result = await db.collection('secure_files').insertOne(doc);
-      // Cast the document to any before spreading. This prevents TypeScript
-      // errors related to the ObjectId type on the _id field. After
-      // insertion the original document does not include an id field, so
-      // we explicitly set it here.
-      const fileDoc: any = doc;
-      return {
-        id: result.insertedId.toString(),
-        ...fileDoc,
-      } as SecureFile;
+      const createdFile = await SecureFile.create(doc);
+      const { _id, __v, ...fileFields } = createdFile.toObject();
+      return { id: createdFile.id, ...fileFields } as SecureFileType;
     } catch (error) {
       console.error('Error creating file:', error);
       return null;
@@ -59,22 +50,17 @@ export class FileService {
   /**
    * Retrieve all secure files belonging to a given user sorted by most recent.
    */
-  async getUserFiles(userId: string): Promise<SecureFile[]> {
+  async getUserFiles(userId: string): Promise<SecureFileType[]> {
     try {
-      const db = await connectToDatabase();
-      const files = await db
-        .collection('secure_files')
-        .find({ user_id: userId })
+      await connectToDatabase();
+      const files = await SecureFile.find({ user_id: userId })
         .sort({ created_at: -1 })
-        .toArray();
-      // Cast each document to any before spreading it into the returned object.
-      // Without casting, TypeScript may complain because the MongoDB document
-      // includes an `_id` field with type ObjectId rather than a string. Casting
-      // to any satisfies the type system and prevents compilation errors.
-      return files.map((f: any) => {
-        const fileDoc: any = f;
-        return { id: fileDoc._id.toString(), ...fileDoc } as SecureFile;
-      }) as SecureFile[];
+        .lean();
+
+      return files.map((f) => {
+        const { _id, __v, ...rest } = f;
+        return { id: _id.toString(), ...rest };
+      }) as SecureFileType[];
     } catch (error) {
       console.error('Error fetching user files:', error);
       return [];
@@ -86,12 +72,10 @@ export class FileService {
    * the file is password protected. Returns null if not found or password is
    * invalid.
    */
-  async getFile(fileId: string, password?: string): Promise<SecureFile | null> {
+  async getFile(fileId: string, password?: string): Promise<SecureFileType | null> {
     try {
-      const db = await connectToDatabase();
-      const file = await db
-        .collection('secure_files')
-        .findOne({ _id: new ObjectId(fileId) });
+      await connectToDatabase();
+      const file = await SecureFile.findById(fileId);
       if (!file) {
         return null;
       }
@@ -105,13 +89,9 @@ export class FileService {
           return null;
         }
       }
-      // Cast file to any before spreading to avoid type mismatch between
-      // ObjectId and string fields. Without casting, TypeScript complains
-      // about spreading an object that contains an ObjectId. By assigning
-      // the document to a local variable typed as `any`, we can spread it
-      // safely. Then we explicitly set the id field as a string.
-      const fileDoc: any = file;
-      return { id: fileDoc._id.toString(), ...fileDoc } as SecureFile;
+
+      const { _id, __v, ...fileFields } = file.toObject();
+      return { id: file.id, ...fileFields } as SecureFileType;
     } catch (error) {
       console.error('Error fetching file:', error);
       return null;
@@ -124,15 +104,14 @@ export class FileService {
    */
   async incrementDownloadCount(fileId: string): Promise<boolean> {
     try {
-      const db = await connectToDatabase();
-      const collection = db.collection('secure_files');
-      const file = await collection.findOne({ _id: new ObjectId(fileId) }, { projection: { download_count: 1, max_downloads: 1 } });
+      await connectToDatabase();
+      const file = await SecureFile.findById(fileId);
       if (!file) {
         return false;
       }
-      const newCount = (file.download_count || 0) + 1;
-      const result = await collection.updateOne({ _id: file._id }, { $set: { download_count: newCount } });
-      return result.modifiedCount > 0;
+      file.download_count = (file.download_count || 0) + 1;
+      await file.save();
+      return true;
     } catch (error) {
       console.error('Error incrementing download count:', error);
       return false;
@@ -144,10 +123,8 @@ export class FileService {
    */
   async deleteFile(fileId: string, userId: string): Promise<boolean> {
     try {
-      const db = await connectToDatabase();
-      const result = await db
-        .collection('secure_files')
-        .deleteOne({ _id: new ObjectId(fileId), user_id: userId });
+      await connectToDatabase();
+      const result = await SecureFile.deleteOne({ _id: fileId, user_id: userId });
       return result.deletedCount > 0;
     } catch (error) {
       console.error('Error deleting file:', error);

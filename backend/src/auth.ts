@@ -1,7 +1,8 @@
 import jwt from "jsonwebtoken";
-import { ObjectId, Db } from "mongodb";
 import { Request } from "express";
 import dotenv from 'dotenv';
+import User from './models/User';
+import { connectToDatabase } from './db';
 
 // Load environment variables before accessing them. Without this call,
 // process.env.JWT_SECRET may be undefined because dotenv.config() was
@@ -15,7 +16,7 @@ if (!JWT_SECRET) {
   throw new Error("JWT_SECRET is not defined in the environment variables.");
 }
 
-export const getUser = async (req: Request, db: Db) => {
+export const getUser = async (req: Request) => {
   const header = req.headers.authorization;
   if (!header) {
     return null;
@@ -32,7 +33,8 @@ export const getUser = async (req: Request, db: Db) => {
       return null;
     }
 
-    const user = await db.collection("users").findOne({ _id: new ObjectId(decoded.userId) });
+    await connectToDatabase();
+    const user = await User.findById(decoded.userId);
     return user;
   } catch (err) {
     // Invalid token, expired token, etc.
